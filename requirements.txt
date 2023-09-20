@@ -9,4 +9,4 @@ pydub
 logging
 python-dotenv
 streamlit_oauth
-oauthlib
+google-auth
