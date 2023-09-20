@@ -11,9 +11,21 @@ from moviepy.config import change_settings
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
+from google.oauth2.credentials import Credentials
 from pydub import AudioSegment
 import logging
+from dotenv import load_dotenv
+from streamlit_oauth import OAuth2Component
+load_dotenv()
 
+AUTHORIZE_URL = os.environ.get('AUTHORIZE_URL')
+TOKEN_URL = os.environ.get('TOKEN_URL')
+REFRESH_TOKEN_URL = os.environ.get('REFRESH_TOKEN_URL')
+REVOKE_TOKEN_URL = os.environ.get('REVOKE_TOKEN_URL')
+CLIENT_ID = os.environ.get('CLIENT_ID')
+CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
+REDIRECT_URI = os.environ.get('REDIRECT_URI')
+SCOPE = os.environ.get('SCOPE')
 
 change_settings({"FFMPEG_BINARY": "./ffmpeg"})
 
@@ -84,10 +96,9 @@ def create_video(y, sr, spectrogram_path, audio_path, progress_bar=None):
 
     return "output.mp4"
 
-
-
-def upload_to_youtube(api_key, video_file, title, description, progress_bar):
-    youtube = build('youtube', 'v3', developerKey=api_key)
+def upload_to_youtube(video_file, title, description, progress_bar):
+    # Use the OAuth 2.0 token stored in st.session_state.credentials
+    youtube = build('youtube', 'v3', credentials=st.session_state.credentials)
 
     body = {
         'snippet': {
@@ -116,12 +127,50 @@ def upload_to_youtube(api_key, video_file, title, description, progress_bar):
 
 st.title("M4A to MP4 Spectrogram Converter")
 
-# Input for YouTube API Key
-api_key = st.text_input("Enter YouTube API Key:", value=st.session_state.get("api_key", ""))
-if api_key:
-    st.session_state["api_key"] = api_key  # Save API key in session state
+# Create OAuth2Component instance
+oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, REFRESH_TOKEN_URL, REVOKE_TOKEN_URL)
+
+# Check if token exists in session state
+if 'token' not in st.session_state:
+    # If not, show authorize button
+    result = oauth2.authorize_button("Authorize", REDIRECT_URI, SCOPE)
+    if result and 'token' in result:
+        # If authorization successful, save token in session state
+        st.session_state.token = result.get('token')
+        # Convert token into Credentials object
+        creds = Credentials(
+            token=st.session_state.token.get("access_token"),
+            refresh_token=st.session_state.token.get("refresh_token"),
+            token_uri=TOKEN_URL,
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[SCOPE]
+        )
+        st.session_state.credentials = creds
+        st.experimental_rerun()
+else:
+    # If token exists in session state, show the token
+    token = st.session_state['token']
+    st.json(token)
+    if st.button("Refresh Token"):
+        # If refresh token button is clicked, refresh the token
+        token = oauth2.refresh_token(token)
+
+        st.session_state.token = token
+        # Convert the refreshed token into Credentials object
+        creds = Credentials(
+            token=st.session_state.token.get("access_token"),
+            refresh_token=st.session_state.token.get("refresh_token"),
+            token_uri=TOKEN_URL,
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[SCOPE]
+        )
+        st.session_state.credentials = creds
+        st.experimental_rerun()
 
 uploaded_file = st.file_uploader("Choose an m4a file...", type="m4a")
+
 
 if uploaded_file is not None:
     # Save the uploaded file to a temporary location
@@ -153,10 +202,12 @@ if uploaded_file is not None:
     with st.spinner("Uploading to YouTube..."):
         progress_bar = st.progress(0)
         try:
-            response = upload_to_youtube(api_key, "output.mp4", video_title, video_description, progress_bar)
+            response = upload_to_youtube(create_video_path, video_title, video_description, progress_bar)
             st.success(f"Video uploaded! [View on YouTube](https://www.youtube.com/watch?v={response['id']})")
         except HttpError as e:
             st.error(f"An error occurred: {e}")
 
     # Clean up the temporary file
     os.remove(temp_path)
+    os.remove("output.mp4")
+    os.remove("spectrogram.png")
