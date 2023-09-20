@@ -16,6 +16,7 @@ from pydub import AudioSegment
 import logging
 from dotenv import load_dotenv
 from streamlit_oauth import OAuth2Component
+import requests
 load_dotenv()
 
 AUTHORIZE_URL = os.environ.get('AUTHORIZE_URL')
@@ -43,12 +44,24 @@ class StreamlitLogger(logging.Logger):
             progress_percentage = int((current_time / self.duration) * 100)
             self.progress_bar.progress(progress_percentage)
 
+def revoke_oauth2_token(token, revoke_url, client_id, client_secret):
+    data = {
+        'token': token.get('access_token'),
+        'token_type_hint': 'access_token',
+        'client_id': client_id,
+        'client_secret': client_secret
+    }
+    response = requests.post(revoke_url, data=data)
+    if response.status_code != 200:  # Check the response status
+        raise Exception(f"Failed to revoke token. Status code: {response.status_code}")
+    return response.status_code  # Return the status code for further handling if needed
+
 
 def generate_spectrogram(y, sr):
     plt.figure(figsize=(10, 4))
 
     # Use provided parameters
-    D = librosa.amplitude_to_db(np.abs(librosa.stft(y, n_fft=4096, hop_length=2048)), ref=np.max)
+    D = librosa.amplitude_to_db(np.abs(librosa.stft(y, n_fft=2048, hop_length=2048)), ref=np.max)
 
     librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='log', fmax=sr / 2)
     plt.axis('off')  # Turn off axis
@@ -96,6 +109,7 @@ def create_video(y, sr, spectrogram_path, audio_path, progress_bar=None):
 
     return "output.mp4"
 
+
 def upload_to_youtube(video_file, title, description, progress_bar):
     # Use the OAuth 2.0 token stored in st.session_state.credentials
     youtube = build('youtube', 'v3', credentials=st.session_state.credentials)
@@ -104,15 +118,15 @@ def upload_to_youtube(video_file, title, description, progress_bar):
         'snippet': {
             'title': title,
             'description': description,
-            'categoryId': '22'  # "People & Blogs" category
+            'categoryId': '10'  # "Music" category
         },
         'status': {
-            'privacyStatus': 'unlisted'  # or 'private' or 'public'
+            'privacyStatus': 'unlisted'
         }
     }
 
+    # Upload the video
     media = MediaFileUpload(video_file, chunksize=-1, resumable=True, mimetype='video/mp4')
-
     request = youtube.videos().insert(part=','.join(body.keys()), body=body, media_body=media)
     response = None
 
@@ -122,10 +136,59 @@ def upload_to_youtube(video_file, title, description, progress_bar):
             progress = int(status.progress() * 100)
             progress_bar.progress(progress)
 
-    return response
+    # After uploading, check if a playlist for the given date exists
+    date_str = title.split(" ")[0]  # Assuming title format is "DATE Rehearsal ..."
+    playlist_title = f"{date_str} Rehearsal Playlist"
+
+    # Search for the playlist
+    search_response = youtube.playlists().list(
+        part="snippet",
+        mine=True,
+        maxResults=50
+    ).execute()
+
+    playlist_id = None
+    for item in search_response.get("items", []):
+        if item["snippet"]["title"] == playlist_title:
+            playlist_id = item["id"]
+            break
+
+    # If playlist doesn't exist, create it
+    if not playlist_id:
+        playlist_body = {
+            'snippet': {
+                'title': playlist_title,
+                'description': f"Rehearsals from {date_str}",
+            },
+            'status': {
+                'privacyStatus': 'unlisted'
+            }
+        }
+        playlist_response = youtube.playlists().insert(
+            part="snippet,status",
+            body=playlist_body
+        ).execute()
+        playlist_id = playlist_response["id"]
+
+    # Add the uploaded video to the playlist
+    youtube.playlistItems().insert(
+        part="snippet",
+        body={
+            "snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {
+                    "kind": "youtube#video",
+                    "videoId": response["id"]
+                }
+            }
+        }
+    ).execute()
+
+    return {"video_id": response['id'], "playlist_id": playlist_id}
 
 
 st.title("M4A to MP4 Spectrogram Converter")
+
 
 # Create OAuth2Component instance
 oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, REFRESH_TOKEN_URL, REVOKE_TOKEN_URL)
@@ -151,23 +214,34 @@ if 'token' not in st.session_state:
 else:
     # If token exists in session state, show the token
     token = st.session_state['token']
-    st.json(token)
-    if st.button("Refresh Token"):
-        # If refresh token button is clicked, refresh the token
-        token = oauth2.refresh_token(token)
 
-        st.session_state.token = token
-        # Convert the refreshed token into Credentials object
-        creds = Credentials(
-            token=st.session_state.token.get("access_token"),
-            refresh_token=st.session_state.token.get("refresh_token"),
-            token_uri=TOKEN_URL,
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            scopes=[SCOPE]
-        )
-        st.session_state.credentials = creds
+    # st.json(token)
+    if st.button("Disconnect"):
+        # Revoke the token here
+        revoke_oauth2_token(st.session_state.token, REVOKE_TOKEN_URL, CLIENT_ID, CLIENT_SECRET)
+
+        # Remove token from session state
+        del st.session_state['token']
         st.experimental_rerun()
+    # if st.button("Refresh Token"):
+    #     try:
+    #         # Attempt to refresh the token
+    #         token = oauth2.refresh_token(token, True)
+    #         st.session_state.token = token
+    #         # Convert the refreshed token into Credentials object
+    #         creds = Credentials(
+    #             token=st.session_state.token.get("access_token"),
+    #             refresh_token=st.session_state.token.get("refresh_token"),
+    #             token_uri=TOKEN_URL,
+    #             client_id=CLIENT_ID,
+    #             client_secret=CLIENT_SECRET,
+    #             scopes=[SCOPE]
+    #         )
+    #         st.session_state.credentials = creds
+    #         st.success("Token refreshed successfully.")  # Feedback to user
+    #         st.experimental_rerun()
+    #     except Exception as e:
+    #         st.error(f"Failed to refresh token: {str(e)}")
 
 uploaded_file = st.file_uploader("Choose an m4a file...", type="m4a")
 
@@ -202,8 +276,9 @@ if uploaded_file is not None:
     with st.spinner("Uploading to YouTube..."):
         progress_bar = st.progress(0)
         try:
-            response = upload_to_youtube(create_video_path, video_title, video_description, progress_bar)
-            st.success(f"Video uploaded! [View on YouTube](https://www.youtube.com/watch?v={response['id']})")
+            response_ids = upload_to_youtube(create_video_path, video_title, video_description, progress_bar)
+            st.success(f"Video uploaded! [View on YouTube](https://www.youtube.com/watch?v={response_ids['video_id']})")
+            st.success(f"Added to Playlist! [View Playlist](https://www.youtube.com/playlist?list={response_ids['playlist_id']})")
         except HttpError as e:
             st.error(f"An error occurred: {e}")
 

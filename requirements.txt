@@ -6,7 +6,7 @@ matplotlib
 moviepy
 google-api-python-client
 pydub
-logging
 python-dotenv
 streamlit_oauth
 google-auth
+requests
