@@ -1,0 +1,12 @@
+streamlit
+numpy
+librosa
+cv2
+matplotlib
+moviepy
+google-api-python-client
+pydub
+logging
+python-dotenv
+streamlit_oauth
+oauthlib
