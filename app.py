@@ -28,7 +28,8 @@ CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
 REDIRECT_URI = os.environ.get('REDIRECT_URI')
 SCOPE = os.environ.get('SCOPE')
 
-change_settings({"FFMPEG_BINARY": "./ffmpeg"})
+if not _RELEASE:
+    change_settings({"FFMPEG_BINARY": "./ffmpeg"})
 
 
 class StreamlitLogger(logging.Logger):
@@ -43,6 +44,7 @@ class StreamlitLogger(logging.Logger):
             current_time = float(msg.split(" ")[1].replace("s", ""))
             progress_percentage = int((current_time / self.duration) * 100)
             self.progress_bar.progress(progress_percentage)
+
 
 def revoke_oauth2_token(token, revoke_url, client_id, client_secret):
     data = {
