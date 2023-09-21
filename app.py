@@ -28,8 +28,6 @@ CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
 REDIRECT_URI = os.environ.get('REDIRECT_URI')
 SCOPE = os.environ.get('SCOPE')
 
-if not _RELEASE:
-    change_settings({"FFMPEG_BINARY": "./ffmpeg"})
 
 
 class StreamlitLogger(logging.Logger):
